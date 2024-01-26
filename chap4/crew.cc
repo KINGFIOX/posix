@@ -1,3 +1,5 @@
+#include <cerrno>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -247,4 +249,175 @@ void* worker_routine(void* arg)
     }
     free(entry);
     return NULL;
+}
+
+/**
+ * @brief 相当于是初始化 crew
+ * 
+ * @param crew 
+ * @param crew_size 
+ * @return int 
+ */
+int crew_create(crew_t* crew, int crew_size)
+{
+    int status;
+
+    if (crew_size > CREW_SIZE) {
+        return EINVAL;
+    }
+    crew->crew_size = crew_size;
+    crew->work_count = 0;
+    crew->first = NULL;
+    crew->last = NULL;
+    status = pthread_mutex_init(&crew->mutex, NULL);
+    if (status != 0) {
+        return status;
+    }
+    status = pthread_cond_init(&crew->done, NULL);
+    if (status != 0) {
+        return status;
+    }
+    status = pthread_cond_init(&crew->go, NULL);
+    if (status != 0) {
+        return status;
+    }
+
+    for (int crew_index = 0; crew_index < crew->crew_size; crew_index++) {
+        crew->crew[crew_index].index = crew_index;
+        crew->crew[crew_index].crew = crew;
+        status = pthread_create(&crew->crew[crew_index].thread, NULL, worker_routine, (void*)&crew->crew[crew_index]);
+        if (status != 0) {
+            err_abort(status, "create worker");
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 这个 生产者 只会生产一次
+ * 
+ * @param crew 
+ * @param filepath 
+ * @param search 
+ * @return int 
+ */
+int crew_start(crew_p crew, char* filepath, char* search)
+{
+    int status; /* 错误状态 */
+
+    work_p request; /* 创建请求 */
+
+    status = pthread_mutex_lock(&crew->mutex);
+    if (status != 0) {
+        return status;
+    }
+    { /* 上锁 */
+        while (crew->work_count > 0) {
+            /* 等待，直到 所有任务都完成了 */
+            status = pthread_cond_wait(&crew->done, &crew->mutex);
+            if (status != 0) {
+                pthread_mutex_unlock(&crew->mutex);
+                return status;
+            }
+        }
+
+        errno = 0;
+        path_max = pathconf(filepath, _PC_PATH_MAX);
+        if (path_max == -1) {
+            if (errno == 0) {
+                path_max = 1024; /* 没有限制 */
+            } else {
+                errno_abort("unable to get PATH_MAX");
+            }
+        }
+
+        errno = 0;
+        name_max = pathconf(filepath, _PC_NAME_MAX);
+        if (name_max == -1) {
+            if (errno == 0) {
+                name_max = 1024; /* 没有限制 */
+            } else {
+                errno_abort("unable to get NAME_MAX");
+            }
+        }
+        printf("PATH_MAX for %s is %ld, NAME_MAX is %ld\n", filepath, path_max, name_max);
+        path_max++; /* 最后一个\0 */
+        name_max++;
+
+        /* 创建新的 request */
+        request = (work_p)malloc(sizeof(work_t));
+        if (request == NULL) {
+            errno_abort("unable to allocate request");
+        }
+        printf("requesting %s\n", filepath);
+        request->path = (char*)malloc(path_max);
+        if (request->path == NULL) {
+            errno_abort("unable to allocate request->path");
+        }
+        strcpy(request->path, filepath);
+        request->string = search;
+        request->next = NULL;
+        if (crew->first == NULL) {
+            crew->first = request;
+            crew->last = request;
+        } else {
+            crew->last->next = request;
+            crew->last = request;
+        }
+        crew->work_count++;
+
+        /* 生产者 准备好了，通知消费者 */
+        status = pthread_cond_signal(&crew->go);
+        if (status != 0) {
+            free(crew->first);
+            crew->first = NULL;
+            crew->work_count = 0;
+            pthread_mutex_unlock(&crew->mutex);
+            return status;
+        }
+
+        /* 分派任务后，等待 crew 中 所有工作完成 */
+        while (crew->work_count > 0) {
+            status = pthread_cond_wait(&crew->done, &crew->mutex);
+            if (status != 0) {
+                err_abort(status, "waiting for crew to finish");
+            }
+        }
+
+    } /* 解锁 */
+    status = pthread_mutex_lock(&crew->mutex);
+    if (status != 0) {
+        return status;
+    }
+    status = pthread_mutex_unlock(&crew->mutex);
+    if (status != 0) {
+        return status;
+    }
+
+    return 0;
+};
+
+int main(int argc, char* argv[])
+{
+    crew_t my_crew; /* 工作组 */
+
+    int status;
+
+    if (argc < 3) {
+        fprintf(stderr, "usage: %s <string> <path>\n", argv[0]);
+        return -1;
+    }
+
+    status = crew_create(&my_crew, CREW_SIZE);
+    if (status != 0) {
+        err_abort(status, "create crew");
+    }
+
+    status = crew_start(&my_crew, argv[2], argv[1]);
+    if (status != 0) {
+        err_abort(status, "create start");
+    }
+
+    return 0;
 }
