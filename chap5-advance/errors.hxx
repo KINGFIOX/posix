@@ -13,6 +13,15 @@
         abort();                                                                            \
     } while (0);
 
+/**
+ * @brief 会使用上下文的 status
+ *
+ */
+#define HANDLE_STATUS(text)      \
+    if (status != 0) {           \
+        err_abort(status, text); \
+    }
+
 #define errno_abort(text)                                                                    \
     do {                                                                                     \
         fprintf(stderr, "%s at \"%s\":%d: %s\n", text, __FILE__, __LINE__, strerror(errno)); \

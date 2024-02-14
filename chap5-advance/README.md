@@ -393,4 +393,195 @@ int main() {
 这个例子展示了并行计算的基本模式：将大任务分解成小任务，多个线程并行处理这些小任务，然后合并结果以得到最终结果。
 这种模式大大加快了处理速度，特别是在处理大量数据时。
 
-##
+## 线程私有数据
+
+线程的私有数据（Thread-specific data，TSD），也称为线程局部存储（Thread-Local Storage，TLS），
+是一种允许不同线程存储和访问各自独立的数据副本的机制。
+这意味着即使多个线程执行相同的代码，它们也能拥有自己的私有数据副本，而这些数据在其他线程中是不可见或不可访问的。
+
+### 为什么需要线程的私有数据？
+
+在多线程程序中，全局变量和静态变量是由所有线程共享的。
+这意味着，如果一个线程修改了这些变量的值，其他所有线程看到的也将是修改后的值。
+这在很多情况下是不可取的，尤其是当你需要保持某些数据与执行线程相关联时。
+使用线程的私有数据可以避免这种全局变量的共享问题，使每个线程都有自己的独立数据副本，从而简化线程间的数据隔离和管理。
+
+### 如何使用线程的私有数据？
+
+在 POSIX 线程库中，线程的私有数据可以通过以下几个关键函数来管理：
+
+- `pthread_key_create`：创建一个键（key），用于标识线程特定数据的位置。
+  每个键可以被同一进程中的所有线程访问，但各线程可以在与该键关联的数据位置存储不同的数据值。
+- `pthread_setspecific`：将键与线程特定的数据值关联起来。每个线程调用这个函数时，可以为相同的键设置不同的值。
+- `pthread_getspecific`：根据键获取与当前线程关联的数据值。
+- `pthread_key_delete`：删除之前创建的键，释放它的资源。注意，这并不会自动释放与键关联的数据内存，需要开发者自己负责清理。
+
+### 示例
+
+以下是一个简单的示例，演示了如何使用 POSIX 线程的线程特定数据功能：
+
+```c
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+pthread_key_t key;
+
+void cleanup(void *arg) {
+    printf("Freeing thread-specific data for thread %ld\n", (long)pthread_self());
+    free(arg);
+}
+
+void* thread_func(void *arg) {
+    int *my_data = malloc(sizeof(int));
+    *my_data = (int)arg;
+
+    pthread_setspecific(key, my_data);
+    printf("Thread %ld set thread-specific data to %d\n", (long)pthread_self(), *my_data);
+
+    int *value = pthread_getspecific(key);
+    printf("Thread %ld got thread-specific data: %d\n", (long)pthread_self(), *value);
+
+    return NULL;
+}
+
+int main() {
+    pthread_t thread1, thread2;
+
+    pthread_key_create(&key, cleanup);
+
+    pthread_create(&thread1, NULL, thread_func, (void*)1);
+    pthread_create(&thread2, NULL, thread_func, (void*)2);
+
+    pthread_join(thread1, NULL);
+    pthread_join(thread2, NULL);
+
+    pthread_key_delete(key);
+
+    return 0;
+}
+```
+
+在这个例子中，两个线程使用同一个键`key`，但它们各自存储和访问的数据是独立的。
+`pthread_key_create`创建一个键，并为其注册了一个清理函数`cleanup`，
+该函数在键被删除或线程退出时调用，用于释放分配的内存。
+每个线程通过`pthread_setspecific`为键设置了一个指向整数的指针，
+然后通过`pthread_getspecific`获取并打印这个整数值。
+这展示了如何在多线程环境中安全地管理和使用线程特定数据。
+
+## pthread_once
+
+`pthread_once`是一个由 POSIX 线程库提供的函数，它确保某个函数在一个程序中只被执行一次。
+这对于执行一些只需初始化一次的操作非常有用，比如初始化全局变量、分配内存、打开文件等操作。
+使用`pthread_once`可以避免在多线程环境中因为并发执行而导致的竞态条件。
+
+### 函数原型
+
+`pthread_once`函数的原型如下：
+
+```c
+int pthread_once(pthread_once_t *once_control, void (*init_routine)(void));
+```
+
+- `once_control`是指向`pthread_once_t`类型的变量的指针，该变量用于控制`init_routine`函数是否已经被调用。`pthread_once_t`变量应该被初始化为`PTHREAD_ONCE_INIT`。
+- `init_routine`是一个无参数、无返回值的函数指针，指向需要被执行一次的初始化函数。
+
+### 使用示例
+
+```c
+#include <pthread.h>
+#include <stdio.h>
+
+// 定义pthread_once_t变量并初始化
+pthread_once_t once = PTHREAD_ONCE_INIT;
+
+// 只需执行一次的初始化函数
+void initialize_once(void) {
+    // 执行一些初始化操作，比如初始化全局变量
+    printf("Initialized.\n");
+}
+
+// 线程函数
+void* threadFunc(void *arg) {
+    // 调用pthread_once确保initialize_once函数只被执行一次
+    pthread_once(&once, initialize_once);
+    printf("Thread %ld running.\n", (long)arg);
+    return NULL;
+}
+
+int main() {
+    pthread_t threads[3];
+
+    // 创建多个线程
+    for (long i = 0; i < 3; i++) {
+        pthread_create(&threads[i], NULL, threadFunc, (void*)i);
+    }
+
+    // 等待线程结束
+    for (int i = 0; i < 3; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    return 0;
+}
+```
+
+在这个示例中，即使有多个线程试图执行`initialize_once`函数，`pthread_once`机制确保该函数只被执行一次。
+这使得它成为多线程程序中执行初始化代码的理想选择。
+
+### 注意事项
+
+- 确保`pthread_once_t`类型的变量在使用前被初始化为`PTHREAD_ONCE_INIT`。
+- `init_routine`函数应该是无参数和无返回值的。
+- 使用`pthread_once`可以避免在多线程程序中使用复杂的锁定机制来保证初始化代码只执行一次，从而简化代码并提高效率。
+
+## 优先级倒置
+
+优先级倒置是多任务或多线程环境中一种潜在的问题，它发生在低优先级的任务或线程阻塞了比它高优先级的任务或线程运行的情况下。
+这种现象违反了优先级调度的基本原则，即高优先级的任务应该比低优先级的任务先执行。
+优先级倒置通常发生在任务或线程共享资源（如互斥锁、信号量等）的情况下。
+
+### 优先级倒置的三种主要形式：
+
+1. **基本优先级倒置**：当一个高优先级任务需要等待一个低优先级任务释放锁定的资源时发生。
+   如果低优先级任务被其他中等优先级任务抢占，高优先级任务可能需要无限期地等待。
+
+2. **不受限的优先级倒置**：这种情况更加严重，其中一个高优先级任务被多个低优先级任务依次阻塞，
+   因为这些低优先级任务控制了高优先级任务需要的资源。
+
+3. **链式阻塞**：一个高优先级任务被一个低优先级任务阻塞，而这个低优先级任务又被另一个更低优先级的任务阻塞，形成一条阻塞链。
+
+### 解决优先级倒置的策略：
+
+- **优先级继承协议**：当一个低优先级任务获得了一个高优先级任务需要的锁时，
+  它临时继承了高优先级任务的优先级，直到它释放锁。这可以减少高优先级任务的等待时间。
+
+- **优先级天花板协议**：设置一个系统范围的优先级天花板（即最高优先级），
+  所有访问共享资源的任务在持有资源时都提升到这个优先级。这样可以避免低优先级任务阻塞高优先级任务。
+
+- **锁分配策略**：通过设计来避免共享资源的锁竞争，例如使用无锁编程技术或精细的锁粒度，减少锁的竞争和阻塞。
+
+优先级倒置问题在实时操作系统（RTOS）中尤其重要，因为在这些系统中，任务的响应时间和执行顺序是至关重要的。
+通过采用合适的策略和协议，可以有效地避免或减轻优先级倒置带来的影响。
+
+### 优先级倒置的例子
+
+让我们通过一个简化的例子来说明优先级倒置的概念：
+
+假设有三个任务：任务 A、任务 B 和任务 C，它们的优先级从高到低依次是：任务 A > 任务 B > 任务 C。这三个任务共享一个资源，例如一个互斥锁。
+
+1. **任务 C**开始运行，因为它是唯一准备就绪的任务。在其执行过程中，它锁定了一个共享资源（例如，通过一个互斥锁）。
+
+2. **任务 A**，一个高优先级任务，变为就绪状态并尝试运行。很快，它也尝试访问被任务 C 锁定的共享资源。
+   由于资源已被锁定，任务 A 不能继续，尽管它拥有最高的优先级。因此，任务 A 进入等待状态，等待共享资源被释放。
+
+3. 在任务 A 等待共享资源期间，**任务 B**（优先级低于任务 A 但高于任务 C）变为就绪状态并开始执行。
+   因为任务 B 的优先级高于任务 C，任务调度器让任务 B 运行，进一步推迟了任务 C 释放共享资源的时间。
+
+在这个场景中，高优先级的任务 A 被低优先级的任务 C 间接阻塞，并且这种阻塞被中等优先级的任务 B 所延长。
+这就是典型的优先级倒置问题。任务 A，尽管拥有最高的优先级，
+却因为一个低优先级任务的行为（和一个中等优先级任务的介入）而无法继续执行。
+
+这个例子中的优先级倒置问题可能导致系统响应时间变长，特别是在实时系统中，这可能导致严重的后果。
+使用诸如优先级继承或优先级天花板等机制可以帮助避免这种情况，
+确保即使在共享资源使用中，系统的调度也能反映任务的优先级顺序。
