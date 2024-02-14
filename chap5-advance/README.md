@@ -309,3 +309,88 @@ pthread_mutex_unlock(&mutex); // 释放互斥锁
 	     if (execute) (__handler.__routine)(__handler.__arg); \
    }
 ```
+
+## 分包线程、承包线程
+
+并行计算中的"承包线程"和"分包线程"概念可以通过一个简单的例子来解释，比如计算一个大数组的元素之和。
+在这个例子中，"承包线程"（Master Thread）负责整体的任务管理和分配，
+而"分包线程"（Worker Threads）则并行执行子任务，完成具体的计算工作。
+
+### 场景描述
+
+假设有一个包含数百万整数的大数组，目标是计算这些整数的总和。
+单线程处理这个任务可能非常耗时，因此我们采用并行计算来加速这个过程。
+
+### 实现步骤
+
+1. **承包线程**：主线程作为承包线程，它负责将大任务分解为多个小任务。
+   例如，如果数组有 1,000,000 个元素，而我们有 10 个可用的线程，
+   主线程可以将数组分成 10 个部分，每个部分包含 100,000 个元素。
+
+2. **分包线程**：每个分包线程负责计算分配给它的数组段的元素和。
+
+3. **结果合并**：所有分包线程完成计算后，它们的计算结果返回给承包线程，
+   承包线程负责将这些结果合并，得到最终的总和。
+
+### 示例代码
+
+以下是一个简化的 C 语言示例，演示了如何使用 POSIX 线程（pthread）来实现上述并行计算：
+
+```c
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define NUM_THREADS 10
+#define ARRAY_SIZE 1000000
+int array[ARRAY_SIZE];
+long long sum[NUM_THREADS] = {0};
+int part = 0; // 用于分割任务
+
+void* sum_array(void* arg) {
+    int thread_part = part++;
+    for (int i = thread_part * (ARRAY_SIZE / NUM_THREADS); i < (thread_part + 1) * (ARRAY_SIZE / NUM_THREADS); i++) {
+        sum[thread_part] += array[i];
+    }
+    return NULL;
+}
+
+int main() {
+    pthread_t threads[NUM_THREADS];
+
+    // 初始化数组
+    for (int i = 0; i < ARRAY_SIZE; i++) {
+        array[i] = i + 1; // 假设数组元素为1到ARRAY_SIZE
+    }
+
+    // 创建线程
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_create(&threads[i], NULL, sum_array, (void*)NULL);
+    }
+
+    // 等待线程完成
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    // 合并结果
+    long long total_sum = 0;
+    for (int i = 0; i < NUM_THREADS; i++) {
+        total_sum += sum[i];
+    }
+
+    printf("Total Sum is %lld\n", total_sum);
+    return 0;
+}
+```
+
+在这个例子中：
+
+- **承包线程**是`main`函数中的主线程，负责创建分包线程，并在所有线程完成后合并结果。
+- **分包线程**由`sum_array`函数实现，每个线程计算数组的一部分和。
+- 使用了全局数组`sum`来存储每个分包线程计算的部分和，最后由主线程合并这些部分和得到总和。
+
+这个例子展示了并行计算的基本模式：将大任务分解成小任务，多个线程并行处理这些小任务，然后合并结果以得到最终结果。
+这种模式大大加快了处理速度，特别是在处理大量数据时。
+
+##
