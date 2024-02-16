@@ -1,7 +1,6 @@
 #include <cstdio>
 #include <pthread.h>
 #include <signal.h>
-#include <sys/_pthread/_pthread_cond_t.h>
 #include <sys/signal.h>
 #include <sys/types.h>
 #include <unistd.h>
