@@ -3,7 +3,7 @@ set_toolchains("@llvm")
 
 -- add_requires("boost")
 
-target("brr") do
+target("rw") do
     set_kind("binary")
     add_files("./*.cxx")
 	set_languages("cxx20")
